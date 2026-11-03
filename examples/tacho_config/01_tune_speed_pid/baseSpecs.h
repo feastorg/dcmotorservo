@@ -49,15 +49,14 @@
 #define SERVO_KP 0.1
 #define SERVO_KI 0.15
 #define SERVO_KD 0.05
-// Position-loop gains retuned for cascaded speed use (tacho_config)
-#define TACHO_OUTER_KP 0.15
-#define TACHO_OUTER_KI 0.00
-#define TACHO_OUTER_KD 0.001
 // Speed loop (tacho_config)
 #define SPEED_INTERVAL 20 // ms
-#define SPEED_KP 0.6
-#define SPEED_KI 0.2
-#define SPEED_KD 0.01
+#define SPEED_KP 0.6      // PWM per RPM
+#define SPEED_KI 3.0      // PWM per RPM-second
+// Feedforward, from the PWM sweep (tacho_config/01): counts/s = FF_KV * (pwm - FF_STATIC)
+#define FF_STATIC 0 // PWM
+#define FF_KV 0     // counts/s per PWM step; 0 = no feedforward
+#define TRIM_LIMIT 255 // PWM; about 20 once the feedforward is set
 
 // ----- Shared driver/encoder instances and wrapper functions -----
 #ifdef USE_LMD18500

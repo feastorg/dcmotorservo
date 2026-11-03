@@ -1,11 +1,11 @@
 # DCMotorServo
 
-An Arduino library for closed-loop control of brushed DC motors with quadrature encoders — position control like a servo (without the angle limit), plus an optional cascaded speed loop. A continuation of [julester23/DCMotorServo](https://github.com/julester23/DCMotorServo), inspired by [AccelStepper](https://github.com/adafruit/AccelStepper).
+An Arduino library for closed-loop control of brushed DC motors with quadrature encoders — position control like a servo (without the angle limit), plus an optional speed loop. A continuation of [julester23/DCMotorServo](https://github.com/julester23/DCMotorServo), inspired by [AccelStepper](https://github.com/adafruit/AccelStepper).
 
 ## Features
 
 - **Position control** (`DCMotorServo`): PID on encoder counts — `moveTo()`, `move()`, `finished()`, accuracy dead-band, PWM-skip stiction compensation
-- **Speed control** (`DCMotorTacho`): cascaded RPM loop layered on the position loop — `setSpeedRPM()`
+- **Speed control** (`DCMotorTacho`): RPM loop driving PWM directly, with feedforward and a bounded PI correction — `setSpeedRPM()`
 - **Extrema sensing** (v1.1.0): software travel limits, physical endstop callbacks, encoder-based stall detection (no extra hardware), and non-blocking homing — endstop or sensorless — with a dead-switch failsafe
 - **Driver-agnostic**: no pin logic in the library. You supply four function pointers and any H-bridge or driver IC works:
 

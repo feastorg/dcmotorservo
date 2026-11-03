@@ -5,43 +5,34 @@ DCMotorTacho::DCMotorTacho(DCMotorServo *servo, double cpr, unsigned long speedI
     : _servo(servo), _CPR(cpr), _speedInterval(speedInterval)
 {
     _desiredSpeedRPM = 0;
-    _speedPIDSetpoint = 0;
-    _speedPIDInput = 0;
-    _speedPIDOutput = 0;
     _measuredSpeedRPM = 0.0;
-    _maxLead = 0;
-    _lastSpeedUpdate = millis();
-    _lastEncoderCount = _servo->getActualPosition();
-
-    // Create inner PID for speed control.
-    // NOTE: We set output limits symmetrically to allow for negative outputs.
-    _speedPID = new PID(&_speedPIDInput, &_speedPIDOutput, &_speedPIDSetpoint, 0.1, 0.2, 0.1, DIRECT);
-    _speedPID->SetSampleTime(_speedInterval);
-    _speedPID->SetOutputLimits(-_CPR * 10, _CPR * 10); // Default limits: ±CPR*10 counts.
-    _speedPID->SetMode(AUTOMATIC);
+    _kp = 0.6;
+    _ki = 3.0;
+    _ffStatic = 0;
+    _ffKv = 0;
+    _trimLimit = 255;
+    _integral = 0;
+    _drivePWM = 0;
+    // Samples spanning about 50 ms, at least 1 and at most WINDOW_MAX.
+    unsigned long span = (_speedInterval > 0) ? (50 + _speedInterval - 1) / _speedInterval : WINDOW_MAX;
+    _winSpan = (span < 1) ? 1 : (span > WINDOW_MAX ? WINDOW_MAX : (uint8_t)span);
+    restartMeasurement();
 }
 
 void DCMotorTacho::setSpeedRPM(double rpm)
 {
     if (_desiredSpeedRPM == 0 && rpm != 0)
     {
-        // Starting: measure from here, not from the last speed sample, which
-        // may predate position or open-loop travel.
-        _lastEncoderCount = _servo->getActualPosition();
-        _lastSpeedUpdate = millis();
+        // Starting: measure from here, not from samples that may predate
+        // position or open-loop travel.
+        restartMeasurement();
+        holdSpeedLoop();
     }
     _desiredSpeedRPM = rpm;
-    _speedPIDSetpoint = rpm;
     if (rpm == 0)
     {
-        // If desired speed is zero, disable inner PID and engage brake.
         holdSpeedLoop();
         _servo->stop();
-    }
-    else
-    {
-        // Otherwise, ensure the inner PID is in automatic mode.
-        _speedPID->SetMode(AUTOMATIC);
     }
 }
 
@@ -50,14 +41,25 @@ double DCMotorTacho::getDesiredSpeedRPM() const
     return _desiredSpeedRPM;
 }
 
-void DCMotorTacho::setPIDTunings(double Kp, double Ki, double Kd)
+void DCMotorTacho::setPIDTunings(double Kp, double Ki)
 {
-    _speedPID->SetTunings(Kp, Ki, Kd);
+    _kp = Kp;
+    _ki = Ki;
 }
 
-void DCMotorTacho::setMaxLead(long counts)
+void DCMotorTacho::setFeedforward(double pwmStatic, double kv)
 {
-    _maxLead = (counts < 0) ? -counts : counts;
+    _ffStatic = (pwmStatic < 0) ? 0 : pwmStatic;
+    _ffKv = (kv < 0) ? 0 : kv;
+}
+
+void DCMotorTacho::setTrimLimit(double pwm)
+{
+    _trimLimit = (pwm < 0) ? -pwm : pwm;
+    if (_integral > _trimLimit)
+        _integral = _trimLimit;
+    else if (_integral < -_trimLimit)
+        _integral = -_trimLimit;
 }
 
 double DCMotorTacho::getMeasuredSpeedRPM() const
@@ -67,22 +69,18 @@ double DCMotorTacho::getMeasuredSpeedRPM() const
 
 void DCMotorTacho::run()
 {
-    // Hold the speed loop while the servo is homing or stall-latched: winding
-    // the position setpoint against a frozen encoder would make clearStall()
-    // (or homing completion) a runaway move, and the zero-speed stop() below
-    // would silently cancel an in-progress homing move.
+    // Hold the speed loop while the servo is homing or stall-latched: the
+    // servo's run() drives the homing move or holds the latched brake.
     if (_servo->isHoming() || _servo->isStalled())
     {
         holdSpeedLoop();
-        _servo->run(); // progress homing / hold the latched brake
-        // Sync AFTER run(): homing completion zeroes the encoder inside it,
-        // and a pre-run() count would fake a huge speed sample next cycle.
-        _lastEncoderCount = _servo->getActualPosition();
-        _lastSpeedUpdate = millis();
+        _servo->run();
+        // Restart AFTER run(): homing completion zeroes the encoder inside
+        // it, and an earlier count would fake a huge speed sample.
+        restartMeasurement();
         return;
     }
 
-    // If desired speed is zero, ensure inner PID is off and stop motor.
     if (_desiredSpeedRPM == 0)
     {
         holdSpeedLoop();
@@ -93,35 +91,42 @@ void DCMotorTacho::run()
         return;
     }
 
+    unsigned long before = _winTime[_winLen - 1];
     if (measureSpeed())
-    {
-        _speedPIDInput = _measuredSpeedRPM;
-        // Re-arm in case the hold above put the PID in MANUAL (no-op when
-        // already AUTOMATIC; the MANUAL->AUTOMATIC transition reinitializes).
-        _speedPID->SetMode(AUTOMATIC);
-        _speedPID->Compute();
-        // Inner PID output (in counts) is added to the outer loop setpoint.
-        _servo->move((long)_speedPIDOutput);
-        if (_maxLead > 0)
-        {
-            // Don't let a stalled shaft bank travel for a lunge on release.
-            long lead = _servo->getRequestedPosition() - _lastEncoderCount;
-            if (lead > _maxLead)
-                _servo->moveTo(_lastEncoderCount + _maxLead);
-            else if (lead < -_maxLead)
-                _servo->moveTo(_lastEncoderCount - _maxLead);
-        }
-    }
-    // Execute the outer (position) loop.
-    _servo->run();
+        updateDrive(_winTime[_winLen - 1] - before);
+    _servo->drive(_drivePWM);
 }
 
-/**
- *  Stops the motor and disables the inner PID controller.
- */
+void DCMotorTacho::updateDrive(unsigned long dt)
+{
+    double maxPWM = _servo->getMaxPWM();
+    double e = _desiredSpeedRPM - _measuredSpeedRPM;
+    double ff = ((_desiredSpeedRPM > 0) ? _ffStatic : -_ffStatic);
+    if (_ffKv > 0)
+        ff += _desiredSpeedRPM * _CPR / 60.0 / _ffKv;
+
+    // Conditional integration: not while the correction or the output is
+    // at its limit in the error's direction.
+    double trim = _kp * e + _integral;
+    bool atLimit = (e > 0 && (trim >= _trimLimit || ff + trim >= maxPWM)) ||
+                   (e < 0 && (trim <= -_trimLimit || ff + trim <= -maxPWM));
+    if (!atLimit)
+    {
+        _integral += _ki * e * (double)dt / 1000.0;
+        if (_integral > _trimLimit)
+            _integral = _trimLimit;
+        else if (_integral < -_trimLimit)
+            _integral = -_trimLimit;
+    }
+
+    trim = constrain(_kp * e + _integral, -_trimLimit, _trimLimit);
+    double u = constrain(ff + trim, -maxPWM, maxPWM);
+    _drivePWM = (int16_t)((u >= 0) ? u + 0.5 : u - 0.5);
+}
+
 void DCMotorTacho::stop()
 {
-    _desiredSpeedRPM = _speedPIDSetpoint = 0;
+    _desiredSpeedRPM = 0;
     _servo->stop();
     holdSpeedLoop();
 }
@@ -129,25 +134,38 @@ void DCMotorTacho::stop()
 // Takes a speed sample once per speed interval. True when it took one.
 bool DCMotorTacho::measureSpeed()
 {
-    unsigned long currentTime = millis();
-    unsigned long dt = currentTime - _lastSpeedUpdate;
-    if (dt < _speedInterval)
+    unsigned long now = millis();
+    if (now - _winTime[_winLen - 1] < _speedInterval)
         return false;
-    long currentCount = _servo->getActualPosition();
-    _measuredSpeedRPM = ((double)(currentCount - _lastEncoderCount) / _CPR) * (60000.0 / dt);
-    _lastEncoderCount = currentCount;
-    _lastSpeedUpdate = currentTime;
+    // Keep at most _winSpan samples back, so the speed spans that many.
+    if (_winLen > _winSpan)
+    {
+        for (uint8_t i = 1; i < _winLen; i++)
+        {
+            _winCount[i - 1] = _winCount[i];
+            _winTime[i - 1] = _winTime[i];
+        }
+        _winLen--;
+    }
+    long count = _servo->getActualPosition();
+    _measuredSpeedRPM = ((double)(count - _winCount[0]) / _CPR) * (60000.0 / (double)(now - _winTime[0]));
+    _winCount[_winLen] = count;
+    _winTime[_winLen] = now;
+    _winLen++;
     return true;
+}
+
+void DCMotorTacho::restartMeasurement()
+{
+    _winCount[0] = _servo->getActualPosition();
+    _winTime[0] = millis();
+    _winLen = 1;
 }
 
 void DCMotorTacho::holdSpeedLoop()
 {
-    // The next MANUAL->AUTOMATIC transition seeds the integral from the
-    // output and the derivative from the input. The motor is braked or
-    // homing whenever the loop is held, so restart both from rest.
-    _speedPID->SetMode(MANUAL);
-    _speedPIDOutput = 0;
-    _speedPIDInput = 0;
+    _integral = 0;
+    _drivePWM = 0;
 }
 
 DCMotorServo *DCMotorTacho::getServo() const

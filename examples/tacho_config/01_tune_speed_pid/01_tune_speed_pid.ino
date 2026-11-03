@@ -6,14 +6,18 @@
 // Create an instance of DCMotorServo using the shared wrappers.
 DCMotorServo servo(wrapMotorWrite, wrapMotorBrake, wrapEncoderRead, wrapEncoderWrite);
 
-// Create an instance of DCMotorTacho.
-// For inner PID (speed control)
+// Create an instance of DCMotorTacho (closed-loop speed).
 DCMotorTacho tacho(&servo, CPR, SPEED_INTERVAL);
 
-// Outer loop PID tunings (position control) for the underlying servo, see servo_config for determining these.
-float outerKp = TACHO_OUTER_KP, outerKi = TACHO_OUTER_KI, outerKd = TACHO_OUTER_KD;
-// Inner loop PID tunings (speed control) will be adjusted via serial commands.
-float innerKp = SPEED_KP, innerKi = SPEED_KI, innerKd = SPEED_KD;
+// Speed loop settings, adjusted via serial commands.
+float speedKp = SPEED_KP, speedKi = SPEED_KI;
+float ffStatic = FF_STATIC, ffKv = FF_KV;
+
+// Open-loop sweep: while sweepPWM is not 0 the motor is driven at that PWM
+// with the speed loop off, and the steady speed is printed in counts/s.
+int sweepPWM = 0;
+long sweepCount = 0;
+unsigned long sweepTime = 0;
 
 void setup()
 {
@@ -21,37 +25,52 @@ void setup()
     // Initialize the motor driver.
     motorDriver.begin();
 
-    // Configure the outer (position) PID controller.
-    servo.setPIDTunings(outerKp, outerKi, outerKd);
-    servo.setPWMSkip(PWM_SKIP);
-    servo.setAccuracy(ACCURACY);
     servo.setMaxPWM(255);
 
     tacho.setSpeedRPM(0);
-    tacho.setPIDTunings(innerKp, innerKi, innerKd);
+    tacho.setPIDTunings(speedKp, speedKi);
+    tacho.setFeedforward(ffStatic, ffKv);
+    tacho.setTrimLimit(TRIM_LIMIT);
 
-    Serial.println("DCMotorTacho (Cascaded Speed Control) Example");
-    Serial.println("Format: {Outer: Setpoint,Input,Output} | MeasuredSpeedRPM | DesiredSpeedRPM");
+    Serial.println("DCMotorTacho (Closed-Loop Speed) Example");
+    Serial.println("Format: MeasuredSpeedRPM | DesiredSpeedRPM");
 }
 
 void loop()
 {
     static unsigned long lastPrintTime = millis();
 
-    // Run the cascaded control loop.
-    tacho.run();
-
-    // Print status every 50ms.
-    if (millis() - lastPrintTime > 50)
+    if (sweepPWM != 0)
     {
-        lastPrintTime = millis();
-        double measuredSpeed = tacho.getMeasuredSpeedRPM();
-        double desiredSpeed = tacho.getDesiredSpeedRPM();
-        Serial.print(tacho.getServo()->getSerialPlotter());
-        Serial.print(", MeasuredSpeedRPM:");
-        Serial.print(measuredSpeed, 2);
-        Serial.print(", DesiredSpeedRPM:");
-        Serial.println(desiredSpeed, 2);
+        servo.drive(sweepPWM);
+        // Print the speed in counts/s every 500 ms.
+        if (millis() - sweepTime >= 500)
+        {
+            long count = servo.getActualPosition();
+            double countsPerS = (count - sweepCount) * 1000.0 / (millis() - sweepTime);
+            Serial.print("PWM ");
+            Serial.print(sweepPWM);
+            Serial.print(": ");
+            Serial.print(countsPerS, 1);
+            Serial.println(" counts/s");
+            sweepCount = count;
+            sweepTime = millis();
+        }
+    }
+    else
+    {
+        // Run the speed loop.
+        tacho.run();
+
+        // Print status every 50ms.
+        if (millis() - lastPrintTime > 50)
+        {
+            lastPrintTime = millis();
+            Serial.print("MeasuredSpeedRPM:");
+            Serial.print(tacho.getMeasuredSpeedRPM(), 2);
+            Serial.print(", DesiredSpeedRPM:");
+            Serial.println(tacho.getDesiredSpeedRPM(), 2);
+        }
     }
 
     // Process serial commands for tuning.
@@ -61,64 +80,67 @@ void loop()
         command.trim();
         if (command.startsWith("SPEED="))
         {
+            sweepPWM = 0;
             double rpm = command.substring(6).toFloat();
             tacho.setSpeedRPM(rpm);
             Serial.print("Desired Speed set to: ");
             Serial.println(rpm);
         }
+        else if (command.startsWith("PWM="))
+        {
+            tacho.stop();
+            sweepPWM = command.substring(4).toInt();
+            sweepCount = servo.getActualPosition();
+            sweepTime = millis();
+            if (sweepPWM == 0)
+                servo.stop();
+            Serial.print("Open-loop PWM set to: ");
+            Serial.println(sweepPWM);
+        }
         else if (command.startsWith("SPEEDKP="))
         {
-            double kp = command.substring(8).toFloat();
-            tacho.setPIDTunings(kp, innerKi, innerKd);
-            innerKp = kp;
-            Serial.print("Inner PID Kp set to: ");
-            Serial.println(kp);
+            speedKp = command.substring(8).toFloat();
+            tacho.setPIDTunings(speedKp, speedKi);
+            Serial.print("Speed Kp set to: ");
+            Serial.println(speedKp);
         }
         else if (command.startsWith("SPEEDKI="))
         {
-            double ki = command.substring(8).toFloat();
-            tacho.setPIDTunings(innerKp, ki, innerKd);
-            innerKi = ki;
-            Serial.print("Inner PID Ki set to: ");
-            Serial.println(ki);
+            speedKi = command.substring(8).toFloat();
+            tacho.setPIDTunings(speedKp, speedKi);
+            Serial.print("Speed Ki set to: ");
+            Serial.println(speedKi);
         }
-        else if (command.startsWith("SPEEDKD="))
+        else if (command.startsWith("FFSTATIC="))
         {
-            double kd = command.substring(8).toFloat();
-            tacho.setPIDTunings(innerKp, innerKi, kd);
-            innerKd = kd;
-            Serial.print("Inner PID Kd set to: ");
-            Serial.println(kd);
+            ffStatic = command.substring(9).toFloat();
+            tacho.setFeedforward(ffStatic, ffKv);
+            Serial.print("Feedforward static PWM set to: ");
+            Serial.println(ffStatic);
         }
-        // Outer loop tuning commands.
-        else if (command.startsWith("KP="))
+        else if (command.startsWith("FFKV="))
         {
-            outerKp = command.substring(3).toFloat();
-            servo.myPID->SetTunings(outerKp, outerKi, outerKd);
-            Serial.print("Outer PID Kp set to: ");
-            Serial.println(outerKp);
+            ffKv = command.substring(5).toFloat();
+            tacho.setFeedforward(ffStatic, ffKv);
+            Serial.print("Feedforward kv set to: ");
+            Serial.println(ffKv);
         }
-        else if (command.startsWith("KI="))
+        else if (command.startsWith("TRIM="))
         {
-            outerKi = command.substring(3).toFloat();
-            servo.myPID->SetTunings(outerKp, outerKi, outerKd);
-            Serial.print("Outer PID Ki set to: ");
-            Serial.println(outerKi);
+            double trim = command.substring(5).toFloat();
+            tacho.setTrimLimit(trim);
+            Serial.print("Trim limit set to: ");
+            Serial.println(trim);
         }
-        else if (command.startsWith("KD="))
+        else if (command.startsWith("STOP"))
         {
-            outerKd = command.substring(3).toFloat();
-            servo.myPID->SetTunings(outerKp, outerKi, outerKd);
-            Serial.print("Outer PID Kd set to: ");
-            Serial.println(outerKd);
-        } else if (command.startsWith("STOP"))
-        {
+            sweepPWM = 0;
             tacho.stop();
             Serial.println("Motor stopped.");
         }
         else
         {
-            Serial.println("Invalid command. Commands: SPEED=, SPEEDKP=, SPEEDKI=, SPEEDKD=, KP=, KI=, KD=");
+            Serial.println("Invalid command. Commands: SPEED=, PWM=, SPEEDKP=, SPEEDKI=, FFSTATIC=, FFKV=, TRIM=, STOP");
         }
     }
 }

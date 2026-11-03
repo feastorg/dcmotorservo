@@ -98,14 +98,14 @@ DCMotorTacho tacho(&servo, CPR);
 
 void setup() {
     driver.begin();
-    servo.setPWMSkip(25);
-    servo.setPIDTunings(0.15, 0.0, 0.001);
-    tacho.setPIDTunings(0.5, 0.1, 0.0);
+    tacho.setPIDTunings(0.6, 3.0);
+    tacho.setFeedforward(10, 24); // from a PWM sweep: see tuning.md
+    tacho.setTrimLimit(20);
     tacho.setSpeedRPM(60);      // target 60 RPM
 }
 
 void loop() {
-    tacho.run();                // runs both the speed and position loops
+    tacho.run();                // runs the speed loop
 }
 ```
 

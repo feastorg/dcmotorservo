@@ -298,32 +298,40 @@ void DCMotorServo::run()
     return;
   }
 
-  myPID->Compute();
-
-  // Compute a PWM value that adds a base skip value
-  int outputPWM = constrain(abs(_PID_output) + _pwm_skip, _pwm_skip, _maxPWM);
-
+  // Inside the deadband: no drive, and the PID is not computed, so its
+  // integral is held for the next move instead of being reset (#26).
+  int finalSpeed = 0;
+  int outputPWM = 0;
   if (fabs(error) < _position_accuracy)
   {
-    myPID->SetMode(MANUAL);
-    _PID_output = 0;
-    outputPWM = 0;
+    _PID_output = 0; // PID_v1 keeps its integral internally; this is the reported output
   }
   else
   {
-    myPID->SetMode(AUTOMATIC);
+    myPID->SetMode(AUTOMATIC); // re-arm after stop(); no-op when already AUTOMATIC
+    myPID->Compute();
+    // A PWM value that adds a base skip value.
+    outputPWM = constrain(abs(_PID_output) + _pwm_skip, _pwm_skip, _maxPWM);
+    // Zero output means no drive: never map it to +pwm_skip.
+    finalSpeed = (_PID_output == 0) ? 0 : ((_PID_output < 0) ? -outputPWM : outputPWM);
+    // Never drive away from the target. Near zero error a small output of
+    // the wrong sign (the integral, or the derivative as the shaft reverses)
+    // would otherwise become a full pwm_skip kick backwards.
+    if ((error > 0 && finalSpeed < 0) || (error < 0 && finalSpeed > 0))
+      finalSpeed = 0;
   }
-
-  // Determine final speed (direction based on PID output sign).
-  // Zero output means no drive — never map it to +pwm_skip.
-  int finalSpeed = (_PID_output == 0) ? 0 : ((_PID_output < 0) ? -outputPWM : outputPWM);
   _PWM_output = (finalSpeed == 0) ? 0 : outputPWM;
 
   // Send the computed speed via the user-supplied function
   motorWrite(finalSpeed);
 
+  watchStall(finalSpeed);
+}
+
+void DCMotorServo::watchStall(int16_t speed)
+{
   // Stall fault: motor driven but encoder not advancing
-  if (_stall_enabled && finalSpeed != 0)
+  if (_stall_enabled && speed != 0)
   {
     if (!_driving)
       resetStallWindow(); // idle -> driving transition: the window starts now
@@ -338,6 +346,38 @@ void DCMotorServo::run()
   {
     _driving = false;
   }
+}
+
+void DCMotorServo::drive(int16_t pwm)
+{
+  if (_homing || _stalled)
+    return; // run() owns homing; a latched stall stays braked
+  // Hold the target at the shaft, so a later run() holds here.
+  _PID_input = encoderRead();
+  _PID_setpoint = _PID_input;
+  myPID->SetMode(MANUAL);
+  _PID_output = 0;
+
+  // The same protections as position mode: a triggered endstop, or a
+  // software travel limit, in the direction of drive brakes the motor.
+  long pos = (long)_PID_input;
+  if ((pwm < 0 && ((endstopMin != nullptr && endstopMin()) || (_limits_enabled && pos <= _limit_min))) ||
+      (pwm > 0 && ((endstopMax != nullptr && endstopMax()) || (_limits_enabled && pos >= _limit_max))))
+  {
+    _PID_setpoint = clampToLimits(pos);
+    haltMotor();
+    return;
+  }
+
+  pwm = constrain(pwm, -(int16_t)_maxPWM, (int16_t)_maxPWM);
+  _PWM_output = (uint8_t)((pwm < 0) ? -pwm : pwm);
+  motorWrite(pwm);
+  watchStall(pwm);
+}
+
+uint8_t DCMotorServo::getMaxPWM()
+{
+  return _maxPWM;
 }
 
 void DCMotorServo::stop()
