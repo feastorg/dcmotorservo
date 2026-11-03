@@ -31,7 +31,7 @@ target_compile_definitions(dcmotorservo_int16_abs PUBLIC ARDUINO=100 FAKE_INT16_
 target_compile_options(dcmotorservo_int16_abs PRIVATE -Wall -Wextra)
 
 enable_testing()
-foreach(name test_servo_smoke test_servo_accuracy test_servo_stop test_tacho_restart test_tacho_resync test_tacho_max_lead test_tacho_measure_at_zero)
+foreach(name test_servo_smoke test_servo_accuracy test_servo_stop test_servo_deadband test_servo_drive test_tacho_resync test_tacho_measure_at_zero test_tacho_speed_loop)
   add_executable(${name} ${name}.cpp)
   target_link_libraries(${name} PRIVATE dcmotorservo)
   add_test(NAME ${name} COMMAND ${name})

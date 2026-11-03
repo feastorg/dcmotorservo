@@ -43,6 +43,8 @@ void run()
 
 Reads the encoder, computes PID output, and sends the result to the motor driver. **Call every loop iteration.** With the extrema features active, `run()` first services the special modes: while homing it drives the homing move instead of the PID (encoder input is not tracked into the PID); while a stall fault is latched it does nothing (motor stays braked); while the target lies beyond a triggered endstop it holds the motor braked and pulls the target to the held position.
 
+Inside the dead-band (`setAccuracy()`) there is no drive and the PID is not computed, so its integral is held for the next move rather than reset. Outside it, a drive whose direction opposes the error is dropped to 0: near zero error a small output of the wrong sign would otherwise become a `pwmSkip` kick away from the target.
+
 #### `stop()`
 
 ```cpp
@@ -50,6 +52,14 @@ void stop()
 ```
 
 Engages the brake, suspends the PID controller, and syncs the target to the current position so the motor holds where it stopped rather than chasing the old setpoint. Also cancels an in-progress homing move.
+
+#### `drive(pwm)`
+
+```cpp
+void drive(int16_t pwm)
+```
+
+Drives the motor at a signed PWM directly, bypassing the position PID; `DCMotorTacho` uses it for speed mode. Call it every pass in place of `run()`. The target follows the shaft, so a later `run()` holds where the motor is. Stall detection, attached endstops and software travel limits apply as in `run()`: a stall latches, and an endstop or limit in the direction of drive brakes the motor. Clamped to ±`maxPWM`; does nothing while homing or while a stall is latched.
 
 #### `moveTo(position)`
 
@@ -122,6 +132,14 @@ void setMaxPWM(uint8_t maxPWM)
 ```
 
 Clamps the maximum PWM output. Also updates PID output limits accordingly.
+
+#### `getMaxPWM()`
+
+```cpp
+uint8_t getMaxPWM()
+```
+
+Returns the maximum PWM output.
 
 #### `setAccuracy(range)`
 
@@ -237,7 +255,17 @@ Returns a comma-separated `Setpoint:x, Input:x, Output:x` string formatted for t
 
 ## DCMotorTacho
 
-Wraps a `DCMotorServo` with a cascaded speed (inner) PID loop. The inner loop measures RPM and produces a moving encoder setpoint; the outer position loop in `DCMotorServo` tracks it.
+Closed-loop speed control. Every speed interval it measures the shaft's speed and drives the motor through `DCMotorServo::drive()` with
+
+```text
+pwm         = feedforward + trim
+feedforward = sign(target) * pwmStatic + target_counts_per_s / kv
+trim        = Kp * error + integral, bounded to +-trimLimit
+```
+
+where `error` is the target RPM less the measured RPM. The integral doesn't accumulate while the trim or the output is at its limit in the error's direction (conditional integration), so a held shaft banks at most `trimLimit` of drive and doesn't lunge on release. With no feedforward set (the default) it is a plain PI on PWM.
+
+The speed is measured over the last ~50 ms of samples (at most 10), so low speeds resolve to more than a count or two. Stall detection, endstops and travel limits on the servo apply in speed mode as in position mode.
 
 ### Constructor
 
@@ -249,7 +277,7 @@ DCMotorTacho(DCMotorServo *servo, double cpr, unsigned long speedInterval = 50)
 | --------------- | -------------------------------------------------------------------------------------- |
 | `servo`         | Pointer to an existing, configured `DCMotorServo` object                               |
 | `cpr`           | Encoder counts per revolution (after gearbox + quadrature). See [tuning.md](tuning.md) |
-| `speedInterval` | Inner loop update interval in ms (default 50 ms)                                       |
+| `speedInterval` | Speed loop update interval in ms (default 50 ms)                                       |
 
 ---
 
@@ -261,7 +289,7 @@ DCMotorTacho(DCMotorServo *servo, double cpr, unsigned long speedInterval = 50)
 void run()
 ```
 
-Runs both the inner speed loop and the outer position loop. **Call every loop iteration.** While the wrapped servo is homing or stall-latched, the speed loop is held (its PID suspended and its counters kept in sync) so it cannot wind the position setpoint against a frozen encoder, and the zero-speed branch cannot silently cancel a homing move (an explicit `stop()` still cancels, as documented); normal speed control resumes automatically afterwards.
+Runs the speed loop. **Call every loop iteration.** While the wrapped servo is homing or stall-latched, the speed loop is held and the servo's `run()` progresses the homing move or holds the brake; speed control resumes automatically afterwards. The zero-speed branch doesn't cancel a homing move (an explicit `stop()` does).
 
 #### `stop()`
 
@@ -269,7 +297,7 @@ Runs both the inner speed loop and the outer position loop. **Call every loop it
 void stop()
 ```
 
-Brakes the motor and disables the inner PID.
+Brakes the motor and resets the speed loop.
 
 #### `setSpeedRPM(rpm)`
 
@@ -277,7 +305,7 @@ Brakes the motor and disables the inner PID.
 void setSpeedRPM(double rpm)
 ```
 
-Sets the desired shaft speed in RPM. Negative values reverse direction. `0` engages the brake. A non-zero speed after `0` starts speed measurement afresh, so travel while the loop was idle doesn't count as speed.
+Sets the desired shaft speed in RPM. Negative values reverse direction. `0` engages the brake and resets the integral. A non-zero speed after `0` starts speed measurement afresh, so travel while the loop was idle doesn't count as speed.
 
 #### `getDesiredSpeedRPM()`
 
@@ -293,23 +321,31 @@ Returns the commanded RPM.
 double getMeasuredSpeedRPM() const
 ```
 
-Returns the most recently calculated actual RPM.
+Returns the most recently measured RPM, over the last ~50 ms. It is measured while the setpoint is 0 as well, but not while the servo is homing or stall-latched.
 
-#### `setPIDTunings(Kp, Ki, Kd)`
-
-```cpp
-void setPIDTunings(double Kp, double Ki, double Kd)
-```
-
-Sets the inner (speed) PID gains. The outer (position) gains are set on the underlying `DCMotorServo`.
-
-#### `setMaxLead(counts)`
+#### `setPIDTunings(Kp, Ki)`
 
 ```cpp
-void setMaxLead(long counts)
+void setPIDTunings(double Kp, double Ki)
 ```
 
-Caps how far the position target may lead the encoder, in counts. Without a cap, a stalled shaft lets the speed loop drive the target arbitrarily far ahead, and the motor lunges to catch up on release. `0` (the default) disables the cap. Set it above the lead the position PID needs to reach the PWM your load requires, or the cap limits drive.
+Sets the speed loop's gains: `Kp` in PWM per RPM of error (default 0.6), `Ki` in PWM per RPM-second (default 3.0).
+
+#### `setFeedforward(pwmStatic, kv)`
+
+```cpp
+void setFeedforward(double pwmStatic, double kv)
+```
+
+Sets the feedforward: the drive the motor needs to turn at the target speed with no correction. From an open-loop PWM sweep, fit counts/s = `kv` × (PWM − `pwmStatic`): `pwmStatic` is the PWM that just starts the shaft turning, `kv` the counts/s per PWM step above it. `kv` 0 (the default) leaves only the static term. Err low: feedforward that under-drives costs a little start-up time, while over-drive overshoots at start-up. See [tuning.md](tuning.md).
+
+#### `setTrimLimit(pwm)`
+
+```cpp
+void setTrimLimit(double pwm)
+```
+
+Bounds the correction (P + I) around the feedforward, in PWM. With feedforward set, about 20 keeps a held shaft from banking more than that. Default 255: no bound beyond `maxPWM`.
 
 #### `getServo()`
 

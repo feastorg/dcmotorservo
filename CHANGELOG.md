@@ -7,6 +7,44 @@ reconstructed from the git log.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `DCMotorTacho` drives PWM directly instead of moving the
+  position target (#26). Every speed interval it sets PWM = feedforward
+  + trim, where the feedforward is `sign(target) * pwmStatic +
+  target_counts_per_s / kv` and the trim is a PI correction on the
+  measured speed, bounded to ±`trimLimit`. The integral doesn't
+  accumulate while the trim or the output is at its limit. In a host
+  model of a 24.3 counts/s-per-PWM motor, 120 RPM now holds within
+  0.1 RPM about 0.2 s after the command, where 1.2.1 took 9.7 s and then
+  climbed to 159 and collapsed to 73, repeatedly; a shaft held for
+  0.5 s at 120 RPM returns to 120.6 RPM rather than 150.8.
+  - `setPIDTunings(Kp, Ki)` takes two gains, in PWM per RPM and per
+    RPM-second (defaults 0.6 and 3.0). Speed gains from 1.x don't carry
+    over.
+  - New `setFeedforward(pwmStatic, kv)` and `setTrimLimit(pwm)`. With
+    neither set, the loop is a plain PI on PWM.
+  - `setMaxLead()` is removed: there is no position target to cap.
+    `setTrimLimit()` bounds what a held shaft can bank (#24).
+  - The speed is measured over the last ~50 ms of samples (at most 10),
+    not one interval.
+- `DCMotorServo::run()` no longer resets the PID's integral inside the
+  dead-band: the PID isn't computed there, so the integral is held for
+  the next move (#26).
+
+### Added
+
+- `DCMotorServo::drive(pwm)`: drive at a signed PWM with the position PID
+  bypassed, with stall detection, endstops and travel limits applied as in
+  `run()`. `DCMotorTacho` uses it.
+- `DCMotorServo::getMaxPWM()`.
+
+### Fixed
+
+- `DCMotorServo::run()` never drives away from the target. Near zero error
+  a small PID output of the wrong sign became a full `pwmSkip` kick
+  backwards (feastorg/Slice_DCMT#62, #105).
+
 ## [1.2.1] — 2026-11-01
 
 #18 is checked by host test only.

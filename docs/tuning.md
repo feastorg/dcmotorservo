@@ -71,27 +71,36 @@ Use `examples/servo_config/03_tune_servo_pid/` with the Arduino Serial Plotter (
 
 ## Stage 3 — Tune the Speed Loop (DCMotorTacho)
 
-Only needed if using `DCMotorTacho`.
-
-The inner (speed) PID output unit is **encoder counts**, fed as a moving setpoint into the outer position loop. Tune it after the position loop is stable.
+Only needed if using `DCMotorTacho`. It drives PWM directly: feedforward from the target speed, plus a PI correction on the measured speed. The position loop's gains don't affect it.
 
 ### 3a — Set speedInterval
 
-The default is 50 ms. The interval must be long enough to accumulate a measurable count change at low speeds. For slow, high-reduction motors, 100–200 ms may be needed.
+The default is 50 ms. The speed is measured over the last ~50 ms of samples (at most 10) whatever the interval, so a shorter interval (5–20 ms) reacts faster without losing resolution. Keep `CPR × RPM_min / 60000 × 50 ≳ 4` counts; for slower motors use a longer interval.
 
-### 3b — Tune Inner PID Gains
+### 3b — Feedforward
 
-Use `examples/tacho_config/01_tune_speed_pid/`. Plot `getMeasuredSpeedRPM()` vs `getDesiredSpeedRPM()`.
+Use `examples/tacho_config/01_tune_speed_pid/` (`PWM=` command), with the motor loaded as in use:
 
-**Procedure:**
+| Step | Action |
+| ---- | ------ |
+| 1 | Drive open loop at four or five PWM values across your range and note the steady counts/s at each. |
+| 2 | Fit counts/s = `kv` × (PWM − `pwmStatic`). Repeat in reverse and take the lower `kv` and the higher `pwmStatic`. |
+| 3 | `tacho.setFeedforward(pwmStatic, kv)` and `tacho.setTrimLimit(20)`. |
 
-| Step | Action                                                                                           |
-| ---- | ------------------------------------------------------------------------------------------------ |
-| 1    | Set Ki = 0, Kd = 0. Increase Kp until measured speed tracks commanded speed without oscillation. |
-| 2    | Add Ki to eliminate steady-state RPM error.                                                      |
-| 3    | Kd is rarely needed for the speed loop; leave at 0 unless there is ringing.                      |
+Err low. Feedforward that under-drives costs a little start-up time; in a host model, feedforward 20 % too high overshot a 60 RPM start by about 15 % (200 ms mean). `kv` scales with supply voltage, so calibrate at the supply you run at.
 
-**Typical starting point:** `Kp=0.5, Ki=0.1, Kd=0.0`
+### 3c — Gains
+
+Plot `getMeasuredSpeedRPM()` against `getDesiredSpeedRPM()`.
+
+| Step | Action |
+| ---- | ------ |
+| 1 | Start from the defaults, Kp 0.6 and Ki 3.0 (PWM per RPM, per RPM-second). |
+| 2 | Raise Kp until the speed tracks briskly with slight oscillation, then back off. |
+| 3 | Ki removes the remaining error; too much shows as slow hunting. |
+| 4 | Grip the shaft briefly and release: it should return to speed without a lunge. |
+
+Without feedforward the loop is a plain PI on PWM. It works, but the integral has to build the whole drive, so it is slower to reach speed.
 
 ---
 
@@ -102,7 +111,9 @@ Use `examples/tacho_config/01_tune_speed_pid/`. Plot `getMeasuredSpeedRPM()` vs 
 | PWM skip          | 50          | `setPWMSkip(value)`            |
 | Max PWM           | 255         | `setMaxPWM(value)`             |
 | Position accuracy | 30 cts      | `setAccuracy(value)`           |
-| Outer Kp/Ki/Kd    | 0.1/0.2/0.1 | `servo.setPIDTunings(...)`     |
+| Position Kp/Ki/Kd | 0.1/0.2/0.1 | `servo.setPIDTunings(...)`     |
 | PID sample time   | 50 ms       | `servo.myPID->SetSampleTime()` |
 | Speed interval    | 50 ms       | `DCMotorTacho` constructor     |
-| Inner Kp/Ki/Kd    | 0.1/0.2/0.1 | `tacho.setPIDTunings(...)`     |
+| Speed Kp/Ki       | 0.6/3.0     | `tacho.setPIDTunings(...)`     |
+| Feedforward       | none        | `tacho.setFeedforward(...)`    |
+| Trim limit        | 255         | `tacho.setTrimLimit(...)`      |

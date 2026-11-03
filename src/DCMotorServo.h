@@ -50,6 +50,18 @@ public:
   void stop();
 
   /**
+   * Drives the motor at a signed PWM directly, bypassing the position PID.
+   * For a speed loop such as DCMotorTacho; call it every pass in place of
+   * run(). The target follows the shaft, so a later run() holds where the
+   * motor is. Stall detection, attached endstops and software travel limits
+   * apply as in run(): a stall latches, and an endstop or limit in the
+   * direction of drive brakes the motor. Does nothing while homing or while
+   * a stall is latched.
+   * @param pwm Signed PWM, clamped to +-maxPWM. 0 coasts at 0 drive.
+   */
+  void drive(int16_t pwm);
+
+  /**
    * Moves the motor to a new relative position.
    * @param new_rela_position The relative position to add to the current target.
    */
@@ -94,6 +106,12 @@ public:
    * @param maxPWM Maximum PWM value.
    */
   void setMaxPWM(uint8_t maxPWM);
+
+  /**
+   * Gets the maximum PWM value allowed.
+   * @return Maximum PWM value.
+   */
+  uint8_t getMaxPWM();
 
   /**
    * Sets the PID tuning parameters.
@@ -250,6 +268,7 @@ private:
   void runHoming();                  // Homing branch of run()
   void finishHoming(bool success);   // Halt; zero encoder on success, hold position on failure
   void haltMotor();                  // Brake, suspend the PID, end the drive cycle
+  void watchStall(int16_t speed);    // Stall-fault check for a drive of speed
 
   // Function pointers for hardware abstraction:
   MotorWriteFunc motorWrite;
