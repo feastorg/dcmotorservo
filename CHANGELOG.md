@@ -7,6 +7,11 @@ reconstructed from the git log.
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-11-02
+
+Checked by host tests and in Slice_DCMT's host motor model only, not yet
+on hardware. Speed gains from 1.x don't carry over: see `docs/tuning.md`.
+
 ### Changed
 
 - **Breaking:** `DCMotorTacho` drives PWM directly instead of moving the
