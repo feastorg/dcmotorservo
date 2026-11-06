@@ -84,10 +84,10 @@ Use `examples/tacho_config/01_tune_speed_pid/` (`PWM=` command), with the motor 
 | Step | Action |
 | ---- | ------ |
 | 1 | Drive open loop at four or five PWM values across your range and note the steady counts/s at each. |
-| 2 | Fit counts/s = `kv` × (PWM − `pwmStatic`). Repeat in reverse and take the lower `kv` and the higher `pwmStatic`. |
+| 2 | Fit counts/s = `kv` × (PWM − `pwmStatic`). Repeat in reverse and take the higher `kv` and the lower `pwmStatic`, which together give the lower drive. |
 | 3 | `tacho.setFeedforward(pwmStatic, kv)` and `tacho.setTrimLimit(20)`. |
 
-Err low. Feedforward that under-drives costs a little start-up time; in a host model, feedforward 20 % too high overshot a 60 RPM start by about 15 % (200 ms mean). `kv` scales with supply voltage, so calibrate at the supply you run at.
+Err towards less drive. Feedforward that under-drives costs a little start-up time; in a host model, feedforward 20 % too high overshot a 60 RPM start by about 15 % (200 ms mean). `kv` scales with supply voltage, so calibrate at the supply you run at.
 
 ### 3c — Gains
 
