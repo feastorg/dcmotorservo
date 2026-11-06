@@ -53,9 +53,9 @@ public:
      * Set the feedforward: the drive the motor needs to turn at the target
      * speed with no correction. Both come from an open-loop PWM sweep: at
      * each PWM, the steady speed in counts/s; fit a line, counts/s =
-     * kv * (pwm - pwmStatic). Set them low rather than high: feedforward
-     * that under-drives costs a little start-up time, while over-drive
-     * overshoots at start-up.
+     * kv * (pwm - pwmStatic). Err towards less drive: a lower pwmStatic
+     * and a higher kv. Feedforward that under-drives costs a little
+     * start-up time, while over-drive overshoots at start-up.
      * @param pwmStatic PWM that just starts the shaft turning (>= 0).
      * @param kv Counts/s per PWM step above pwmStatic; 0 (the default)
      *        leaves only the static term.

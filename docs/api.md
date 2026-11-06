@@ -337,7 +337,7 @@ Sets the speed loop's gains: `Kp` in PWM per RPM of error (default 0.6), `Ki` in
 void setFeedforward(double pwmStatic, double kv)
 ```
 
-Sets the feedforward: the drive the motor needs to turn at the target speed with no correction. From an open-loop PWM sweep, fit counts/s = `kv` × (PWM − `pwmStatic`): `pwmStatic` is the PWM that just starts the shaft turning, `kv` the counts/s per PWM step above it. `kv` 0 (the default) leaves only the static term. Err low: feedforward that under-drives costs a little start-up time, while over-drive overshoots at start-up. See [tuning.md](tuning.md).
+Sets the feedforward: the drive the motor needs to turn at the target speed with no correction. From an open-loop PWM sweep, fit counts/s = `kv` × (PWM − `pwmStatic`): `pwmStatic` is the PWM that just starts the shaft turning, `kv` the counts/s per PWM step above it. `kv` 0 (the default) leaves only the static term. Err towards less drive, a lower `pwmStatic` and a higher `kv`: feedforward that under-drives costs a little start-up time, while over-drive overshoots at start-up. See [tuning.md](tuning.md).
 
 #### `setTrimLimit(pwm)`
 
