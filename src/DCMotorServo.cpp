@@ -310,6 +310,19 @@ void DCMotorServo::run()
   {
     myPID->SetMode(AUTOMATIC); // re-arm after stop(); no-op when already AUTOMATIC
     myPID->Compute();
+    // No integral while the drive is saturated. A long move otherwise winds
+    // it up; when the shaft coasts past the target the integral points away
+    // from it, the rule below zeroes the drive, and the motor sits outside
+    // the deadband until the integral unwinds. PID_v1 doesn't expose its
+    // integral: MANUAL -> AUTOMATIC sets it to the output, here 0.
+    if (fabs(_PID_output) + _pwm_skip >= _maxPWM)
+    {
+      double out = _PID_output;
+      myPID->SetMode(MANUAL);
+      _PID_output = 0;
+      myPID->SetMode(AUTOMATIC);
+      _PID_output = out;
+    }
     // A PWM value that adds a base skip value.
     outputPWM = constrain(abs(_PID_output) + _pwm_skip, _pwm_skip, _maxPWM);
     // Zero output means no drive: never map it to +pwm_skip.
