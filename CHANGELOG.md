@@ -7,6 +7,16 @@ reconstructed from the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- A long position move could stop short of the target and stay there.
+  The PID's integral wound up while the drive was saturated; when the
+  shaft coasted past the target it pointed away from it, `run()`
+  refused to drive away, and the motor sat outside the deadband with no
+  drive until the integral unwound. On a Slice_DCMT bench a
+  7282-count move stopped 48 counts past the target for over 60 s.
+  `run()` now zeroes the integral while the drive is saturated.
+
 ## [2.0.0] — 2026-11-02
 
 Checked by host tests and in Slice_DCMT's host motor model only, not yet
