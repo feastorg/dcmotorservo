@@ -1,6 +1,6 @@
 {
     "name": "DCMotorServo",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "description": "Driver-agnostic DC motor position and speed control using PID and quadrature encoder feedback. Supports any motor driver via function pointers. Includes a cascaded speed-control layer (DCMotorTacho) for RPM-based control.",
     "keywords": ["motor", "dc-motor", "pid", "encoder", "servo", "speed-control", "h-bridge"],
     "authors": [
