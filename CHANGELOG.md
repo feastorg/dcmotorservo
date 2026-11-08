@@ -7,15 +7,27 @@ reconstructed from the git log.
 
 ## [Unreleased]
 
+## [2.0.1] — 2026-11-07
+
+Checked on hardware: a Slice_DCMT gen2 Nano Every with two motors and
+848-count encoders. Speed mode held 10–150 RPM in both directions,
+within 0.5 RPM over the last 5 s of each run (on 2.0.0; this release
+doesn't touch the speed path, and a 120 RPM run on it gave 120.3).
+Position moves of 7282 and 16000 counts ended within 6 counts.
+
 ### Fixed
 
-- A long position move could stop short of the target and stay there.
+- A long position move could stop past the target and stay there.
   The PID's integral wound up while the drive was saturated; when the
   shaft coasted past the target it pointed away from it, `run()`
   refused to drive away, and the motor sat outside the deadband with no
   drive until the integral unwound. On a Slice_DCMT bench a
   7282-count move stopped 48 counts past the target for over 60 s.
   `run()` now zeroes the integral while the drive is saturated.
+- The tuning docs, the tacho_config example and the `setFeedforward()`
+  comment said to take the lower `kv` and the higher `pwmStatic` from a
+  sweep to err low, which over-drives. They now say the higher `kv` and
+  the lower `pwmStatic` (#29).
 
 ## [2.0.0] — 2026-11-02
 
